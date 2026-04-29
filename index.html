@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SismoAlert Pro - v4.9.1 Fixed Test</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+    <style>
+        body { margin: 0; padding: 0; background-color: #121212; font-family: 'Segoe UI', sans-serif; overflow: hidden; color: white; }
+        #map { height: 100vh; width: 100%; }
+        
+        .dashboard { 
+            position: absolute; top: 10px; left: 10px; z-index: 1000; 
+            background: rgba(20, 20, 20, 0.9); padding: 20px; 
+            border-radius: 12px; border: 1px solid #333; width: 320px;
+            backdrop-filter: blur(10px); box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+        }
+
+        .stat-card { background: #1a1a1a; padding: 10px; border-radius: 8px; margin-bottom: 10px; border-left: 4px solid #3498db; }
+        .stat-val { font-size: 20px; font-weight: bold; display: block; }
+        .stat-label { font-size: 11px; color: #888; text-transform: uppercase; }
+
+        #event-log {
+            margin-top: 15px; max-height: 200px; overflow-y: auto;
+            font-size: 11px; background: rgba(0,0,0,0.4); 
+            border-radius: 8px; padding: 10px; border: 1px solid #444;
+        }
+        #event-log::-webkit-scrollbar { width: 6px; }
+        #event-log::-webkit-scrollbar-thumb { background: #444; border-radius: 10px; }
+
+        .log-item { border-bottom: 1px solid #333; padding: 8px 0; color: #ccc; }
+        .log-item b { color: #ff4444; }
+
+        #alert-overlay {
+            display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
+            background: rgba(255, 0, 0, 0.2); z-index: 9998; pointer-events: none;
+            animation: pulse 1s infinite;
+        }
+        @keyframes pulse { 0% { opacity: 0.1; } 50% { opacity: 0.4; } 100% { opacity: 0.1; } }
+
+        input[type=range] { width: 100%; margin-top: 8px; cursor: pointer; }
+        button { border: none; padding: 12px; border-radius: 6px; font-weight: bold; cursor: pointer; }
+        .btn-off { background: #27ae60; color: white; }
+        .btn-on { background: #e74c3c; color: white; }
+        .btn-test { background: #34495e; color: white; width: 100%; margin-top: 10px; }
+    </style>
+</head>
+<body>
+
+    <div id="alert-overlay"></div>
+
+    <div class="dashboard">
+        <h2 style="margin: 0 0 15px 0; font-size: 18px; color: #ff4444;">🛰️ SismoAlert <small>v4.9.1</small></h2>
+        
+        <div class="stat-card">
+            <span id="dist-display" class="stat-val">500 km</span>
+            <span class="stat-label">Radio de Alerta</span>
+            <input type="range" id="dist-slider" min="100" max="5000" step="100" value="500">
+        </div>
+
+        <div class="stat-card">
+            <span id="mag-display" class="stat-val">0.0 Mag</span>
+            <span class="stat-label">Min Magnitud</span>
+            <input type="range" id="mag-slider" min="0" max="8" step="0.5" value="0">
+        </div>
+
+        <button id="btn-toggle" class="btn-off" style="width: 100%;">🔊 ARMAR SISTEMA</button>
+        <button id="btn-test" class="btn-test">🛠️ INICIAR TEST VISUAL Y SONORO</button>
+
+        <div id="event-log">
+            <div style="color:#666; text-align:center; padding: 10px;">Esperando ubicación...</div>
+        </div>
+    </div>
+
+    <div id="map"></div>
+
+    <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+
+    <script>
+        var map = L.map('map', { 
+            zoomControl: false, 
+            attributionControl: false,
+            preferCanvas: true 
+        }).setView([0, 0], 2);
+
+        var userLocation = null;
+        var audioCtx = null;
+        var alarmInterval = null;
+        var alertRadius = 500;
+        var minMagnitude = 0;
+        var alertaHabilitada = false;
+        var capaSismos = L.layerGroup().addTo(map);
+
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png').addTo(map);
+
+        document.getElementById('dist-slider').oninput = function() {
+            alertRadius = this.value;
+            document.getElementById('dist-display').innerText = this.value + " km";
+            actualizarCirculo();
+            cargarSismos();
+        };
+
+        document.getElementById('mag-slider').oninput = function() {
+            minMagnitude = this.value;
+            document.getElementById('mag-display').innerText = this.value + " Mag";
+            cargarSismos();
+        };
+
+        var radioVisual = L.circle([0,0], {radius: 0, color: '#3498db', weight: 1, fillOpacity: 0.05, interactive: false}).addTo(map);
+
+        function actualizarCirculo() {
+            if (userLocation) {
+                radioVisual.setLatLng(userLocation).setRadius(alertRadius * 1000);
+            }
+        }
+
+        map.locate({setView: true, maxZoom: 5});
+        map.on('locationfound', e => {
+            userLocation = e.latlng;
+            actualizarCirculo();
+            cargarSismos();
+        });
+
+        function beep() {
+            if (!audioCtx || !alertaHabilitada) return;
+            if(audioCtx.state === 'suspended') audioCtx.resume();
+            let osc = audioCtx.createOscillator();
+            let gain = audioCtx.createGain();
+            osc.type = 'sawtooth';
+            osc.frequency.setValueAtTime(440, audioCtx.currentTime);
+            gain.gain.setValueAtTime(0.02, audioCtx.currentTime);
+            osc.connect(gain); gain.connect(audioCtx.destination);
+            osc.start(); osc.stop(audioCtx.currentTime + 0.1);
+        }
+
+        document.getElementById('btn-toggle').onclick = function() {
+            alertaHabilitada = !alertaHabilitada;
+            this.className = alertaHabilitada ? "btn-on" : "btn-off";
+            this.innerHTML = alertaHabilitada ? "🛑 SILENCIAR ALERTA" : "🔊 ARMAR SISTEMA";
+            if (alertaHabilitada) {
+                if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            } else {
+                detenerEfectos();
+            }
+        };
+
+        function detenerEfectos() {
+            document.getElementById('alert-overlay').style.display = 'none';
+            clearInterval(alarmInterval);
+            alarmInterval = null;
+        }
+
+        function cargarSismos() {
+            fetch("/sismos")
+                .then(res => res.json())
+                .then(data => {
+                    capaSismos.clearLayers();
+                    let hayPeligro = false;
+                    let logHTML = "";
+
+                    const filtrados = data.filter(s => s.magnitud_promedio >= minMagnitude);
+
+                    filtrados.forEach(s => {
+                        let dist = userLocation ? map.distance(userLocation, [s.lat, s.lng]) / 1000 : 9999;
+                        if (dist < alertRadius) {
+                            logHTML += `<div class="log-item">⚠️ <b>${s.magnitud_promedio.toFixed(1)}</b> - ${s.ubicacion}</div>`;
+                            if (s.riesgo === "alto") hayPeligro = true;
+                        }
+
+                        L.rectangle([[s.lat-0.5, s.lng-0.5], [s.lat+0.5, s.lng+0.5]], {
+                            color: s.riesgo === "alto" ? "red" : (s.riesgo === "medio" ? "orange" : "green"),
+                            stroke: false, fillOpacity: 0.5, interactive: false
+                        }).addTo(capaSismos);
+                    });
+
+                    document.getElementById('event-log').innerHTML = logHTML || "<div style='text-align:center;color:#555;'>Sin actividad</div>";
+                    
+                    if (hayPeligro && alertaHabilitada) {
+                        document.getElementById('alert-overlay').style.display = 'block';
+                        if (!alarmInterval) alarmInterval = setInterval(beep, 800);
+                    } else {
+                        detenerEfectos();
+                    }
+                });
+        }
+
+        // --- TEST CORREGIDO ---
+        document.getElementById('btn-test').onclick = function() {
+            if(!userLocation) return alert("Esperando ubicación...");
+            
+            // 1. Crear el rectángulo de test manualmente
+            const testLat = userLocation.lat + 0.1;
+            const testLng = userLocation.lng + 0.1;
+            
+            const rectTest = L.rectangle([[testLat-0.5, testLng-0.5], [testLat+0.5, testLng+0.5]], {
+                color: 'purple', weight: 3, fillOpacity: 0.8, interactive: false
+            }).addTo(map); // Se agrega directo al mapa para que ignore el canvas si es necesario
+
+            // 2. Forzar efectos
+            document.getElementById('alert-overlay').style.display = 'block';
+            let oldHabilitada = alertaHabilitada;
+            alertaHabilitada = true; // Forzamos audio
+            if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+            
+            let testInterval = setInterval(beep, 400);
+
+            // 3. Limpiar tras 4 segundos
+            setTimeout(() => {
+                map.removeLayer(rectTest);
+                clearInterval(testInterval);
+                document.getElementById('alert-overlay').style.display = 'none';
+                alertaHabilitada = oldHabilitada;
+                if(!alertaHabilitada) detenerEfectos();
+            }, 4000);
+        };
+
+        setInterval(cargarSismos, 30000);
+    </script>
+</body>
+</html>
