@@ -3,95 +3,121 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SismoAlert Pro - v4.9.1 Fixed Test</title>
+    <title>SismoAlert Chile - Pro + IA</title>
     <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
     <style>
-        body { margin: 0; padding: 0; background-color: #121212; font-family: 'Segoe UI', sans-serif; overflow: hidden; color: white; }
+        body { margin: 0; padding: 0; background-color: #0a0a0a; font-family: 'Segoe UI', sans-serif; overflow: hidden; color: white; }
         #map { height: 100vh; width: 100%; }
+        .dashboard { position: absolute; top: 10px; left: 10px; z-index: 1000; background: rgba(15, 15, 15, 0.9); padding: 20px; border-radius: 12px; border: 1px solid #444; width: 320px; backdrop-filter: blur(10px); }
         
-        .dashboard { 
-            position: absolute; top: 10px; left: 10px; z-index: 1000; 
-            background: rgba(20, 20, 20, 0.9); padding: 20px; 
-            border-radius: 12px; border: 1px solid #333; width: 320px;
-            backdrop-filter: blur(10px); box-shadow: 0 8px 32px rgba(0,0,0,0.5);
-        }
+        .status-bar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 15px; font-size: 11px; color: #aaa; }
+        .led { width: 8px; height: 8px; border-radius: 50%; background: #27ae60; margin-right: 5px; display: inline-block; }
+        .led-active { animation: blink 1s infinite; }
+        @keyframes blink { 0% { opacity: 1; } 50% { opacity: 0.3; } 100% { opacity: 1; } }
 
-        .stat-card { background: #1a1a1a; padding: 10px; border-radius: 8px; margin-bottom: 10px; border-left: 4px solid #3498db; }
+        .stat-card { background: #151515; padding: 10px; border-radius: 8px; margin-bottom: 10px; border-left: 4px solid #ff4444; }
         .stat-val { font-size: 20px; font-weight: bold; display: block; }
-        .stat-label { font-size: 11px; color: #888; text-transform: uppercase; }
-
-        #event-log {
-            margin-top: 15px; max-height: 200px; overflow-y: auto;
-            font-size: 11px; background: rgba(0,0,0,0.4); 
-            border-radius: 8px; padding: 10px; border: 1px solid #444;
-        }
+        .stat-label { font-size: 10px; color: #888; text-transform: uppercase; }
+        
+        #event-log { margin-top: 15px; max-height: 200px; overflow-y: auto; font-size: 12px; background: rgba(0,0,0,0.4); border-radius: 8px; padding: 10px; border: 1px solid #333; }
         #event-log::-webkit-scrollbar { width: 6px; }
         #event-log::-webkit-scrollbar-thumb { background: #444; border-radius: 10px; }
-
-        .log-item { border-bottom: 1px solid #333; padding: 8px 0; color: #ccc; }
+        
+        .log-item { border-bottom: 1px solid #222; padding: 8px 0; display: flex; justify-content: space-between; }
         .log-item b { color: #ff4444; }
 
-        #alert-overlay {
-            display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%;
-            background: rgba(255, 0, 0, 0.2); z-index: 9998; pointer-events: none;
-            animation: pulse 1s infinite;
-        }
+        #alert-overlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(255, 0, 0, 0.2); z-index: 9998; pointer-events: none; animation: pulse 0.8s infinite; }
         @keyframes pulse { 0% { opacity: 0.1; } 50% { opacity: 0.4; } 100% { opacity: 0.1; } }
-
-        input[type=range] { width: 100%; margin-top: 8px; cursor: pointer; }
-        button { border: none; padding: 12px; border-radius: 6px; font-weight: bold; cursor: pointer; }
+        
+        button { border: none; padding: 12px; border-radius: 6px; font-weight: bold; cursor: pointer; width: 100%; margin-top: 5px; }
         .btn-off { background: #27ae60; color: white; }
         .btn-on { background: #e74c3c; color: white; }
-        .btn-test { background: #34495e; color: white; width: 100%; margin-top: 10px; }
+        .btn-test { background: #34495e; color: #ccc; font-size: 11px; margin-top: 10px; }
+        
+        .leaflet-popup-content-wrapper { background: #151515 !important; color: white !important; border: 1px solid #444; }
+        .leaflet-popup-tip { background: #151515 !important; }
     </style>
 </head>
 <body>
-
     <div id="alert-overlay"></div>
-
     <div class="dashboard">
-        <h2 style="margin: 0 0 15px 0; font-size: 18px; color: #ff4444;">🛰️ SismoAlert <small>v4.9.1</small></h2>
+        <div class="status-bar">
+            <span>SISTEMA: <span id="status-text">CONECTADO</span></span>
+            <div id="status-led" class="led"></div>
+        </div>
+        <h2 style="margin: 0 0 10px 0; font-size: 18px;">🛰️ SismoAlert <span style="color:#ff4444">Chile</span></h2>
         
         <div class="stat-card">
-            <span id="dist-display" class="stat-val">500 km</span>
-            <span class="stat-label">Radio de Alerta</span>
-            <input type="range" id="dist-slider" min="100" max="5000" step="100" value="500">
+            <span id="dist-display" class="stat-val">2500 km</span>
+            <span class="stat-label">Radio de Cobertura</span>
+            <input type="range" id="dist-slider" min="100" max="2500" step="100" value="2500" style="width: 100%;">
         </div>
 
         <div class="stat-card">
-            <span id="mag-display" class="stat-val">0.0 Mag</span>
-            <span class="stat-label">Min Magnitud</span>
-            <input type="range" id="mag-slider" min="0" max="8" step="0.5" value="0">
+            <span id="mag-display" class="stat-val">1.5 Mag</span>
+            <span class="stat-label">Sensibilidad Mínima</span>
+            <input type="range" id="mag-slider" min="1" max="8" step="0.5" value="1.5" style="width: 100%;">
         </div>
 
-        <button id="btn-toggle" class="btn-off" style="width: 100%;">🔊 ARMAR SISTEMA</button>
-        <button id="btn-test" class="btn-test">🛠️ INICIAR TEST VISUAL Y SONORO</button>
-
-        <div id="event-log">
-            <div style="color:#666; text-align:center; padding: 10px;">Esperando ubicación...</div>
-        </div>
+        <button id="btn-toggle" class="btn-off">🔊 ARMAR SISTEMA</button>
+        <button id="btn-test" class="btn-test">🛠️ DIAGNÓSTICO DE SISTEMA</button>
+        
+        <div id="event-log">Sincronizando satélites...</div>
     </div>
-
+    
     <div id="map"></div>
 
     <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
-
     <script>
-        var map = L.map('map', { 
-            zoomControl: false, 
-            attributionControl: false,
-            preferCanvas: true 
-        }).setView([0, 0], 2);
+        // Configuración inicial del mapa
+        var map = L.map('map', { zoomControl: true }).setView([-33.45, -70.66], 5);
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png').addTo(map);
 
-        var userLocation = null;
+        var userLocation = { lat: -33.45, lng: -70.66 };
         var audioCtx = null;
         var alarmInterval = null;
-        var alertRadius = 500;
-        var minMagnitude = 0;
+        var alertRadius = 2500;
+        var minMagnitude = 1.5;
         var alertaHabilitada = false;
         var capaSismos = L.layerGroup().addTo(map);
+        var radioVisual = L.circle(userLocation, {radius: 2500000, color: '#ff4444', weight: 1, fillOpacity: 0.05}).addTo(map);
 
-        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png').addTo(map);
+        // --- FUNCIÓN DE PREDICCIÓN POR IA (AL HACER CLIC) ---
+        function onMapClick(e) {
+            const lat = e.latlng.lat.toFixed(4);
+            const lng = e.latlng.lng.toFixed(4);
+
+            const popup = L.popup()
+                .setLatLng(e.latlng)
+                .setContent('<div style="color:white; background:#151515; padding:5px;">🧠 IA Analizando...</div>')
+                .openOn(map);
+
+            fetch(`http://127.0.0.1:8000/prediccion_ia?lat=${lat}&lng=${lng}`)
+                .then(res => res.json())
+                .then(data => {
+                    if (data.status === "success") {
+                        popup.setContent(`
+                            <div style="text-align:center; padding:10px; min-width:150px;">
+                                <b style="color:#00ff88; font-size:12px;">🧠 PREDICCIÓN IA</b><br>
+                                <hr style="border:0.5px solid #444; margin:8px 0;">
+                                <span style="font-size:22px; font-weight:bold;">${data.magnitud_predicha}</span><br>
+                                <small style="color:#aaa;">Magnitud Estimada</small><br>
+                                <div style="margin-top:8px; font-size:9px; color:#555;">ZONA: ${lat}, ${lng}</div>
+                            </div>
+                        `);
+                    }
+                })
+                .catch(err => {
+                    popup.setContent("⚠️ Error: ¿Servidor prendido?");
+                });
+        }
+
+        map.on('click', onMapClick);
+
+        // --- LÓGICA DE ALERTAS Y DATOS ---
+        function actualizarCirculo() {
+            radioVisual.setLatLng(userLocation).setRadius(alertRadius * 1000);
+        }
 
         document.getElementById('dist-slider').oninput = function() {
             alertRadius = this.value;
@@ -101,34 +127,17 @@
         };
 
         document.getElementById('mag-slider').oninput = function() {
-            minMagnitude = this.value;
+            minMagnitude = parseFloat(this.value);
             document.getElementById('mag-display').innerText = this.value + " Mag";
             cargarSismos();
         };
 
-        var radioVisual = L.circle([0,0], {radius: 0, color: '#3498db', weight: 1, fillOpacity: 0.05, interactive: false}).addTo(map);
-
-        function actualizarCirculo() {
-            if (userLocation) {
-                radioVisual.setLatLng(userLocation).setRadius(alertRadius * 1000);
-            }
-        }
-
-        map.locate({setView: true, maxZoom: 5});
-        map.on('locationfound', e => {
-            userLocation = e.latlng;
-            actualizarCirculo();
-            cargarSismos();
-        });
-
         function beep() {
             if (!audioCtx || !alertaHabilitada) return;
-            if(audioCtx.state === 'suspended') audioCtx.resume();
             let osc = audioCtx.createOscillator();
             let gain = audioCtx.createGain();
-            osc.type = 'sawtooth';
-            osc.frequency.setValueAtTime(440, audioCtx.currentTime);
-            gain.gain.setValueAtTime(0.02, audioCtx.currentTime);
+            osc.type = 'sawtooth'; osc.frequency.value = 880;
+            gain.gain.value = 0.05;
             osc.connect(gain); gain.connect(audioCtx.destination);
             osc.start(); osc.stop(audioCtx.currentTime + 0.1);
         }
@@ -136,84 +145,71 @@
         document.getElementById('btn-toggle').onclick = function() {
             alertaHabilitada = !alertaHabilitada;
             this.className = alertaHabilitada ? "btn-on" : "btn-off";
-            this.innerHTML = alertaHabilitada ? "🛑 SILENCIAR ALERTA" : "🔊 ARMAR SISTEMA";
-            if (alertaHabilitada) {
-                if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-            } else {
-                detenerEfectos();
-            }
+            this.innerHTML = alertaHabilitada ? "🛑 SILENCIAR" : "🔊 ARMAR SISTEMA";
+            if (alertaHabilitada && !audioCtx) audioCtx = new AudioContext();
         };
 
-        function detenerEfectos() {
-            document.getElementById('alert-overlay').style.display = 'none';
-            clearInterval(alarmInterval);
-            alarmInterval = null;
-        }
-
         function cargarSismos() {
-            fetch("/sismos")
+            const led = document.getElementById('status-led');
+            led.classList.add('led-active');
+            
+            fetch("http://127.0.0.1:8000/sismos")
                 .then(res => res.json())
                 .then(data => {
                     capaSismos.clearLayers();
-                    let hayPeligro = false;
                     let logHTML = "";
+                    let hayAlertaActiva = false;
 
-                    const filtrados = data.filter(s => s.magnitud_promedio >= minMagnitude);
+                    data.forEach(s => {
+                        let dist = map.distance(userLocation, [s.lat, s.lng]) / 1000;
+                        let horaStr = new Date(s.time).toLocaleTimeString();
 
-                    filtrados.forEach(s => {
-                        let dist = userLocation ? map.distance(userLocation, [s.lat, s.lng]) / 1000 : 9999;
-                        if (dist < alertRadius) {
-                            logHTML += `<div class="log-item">⚠️ <b>${s.magnitud_promedio.toFixed(1)}</b> - ${s.ubicacion}</div>`;
-                            if (s.riesgo === "alto") hayPeligro = true;
+                        if (s.mag >= minMagnitude) {
+                            if (dist <= alertRadius) {
+                                logHTML += `<div class="log-item"><span><b>${s.mag}</b> - ${s.place}</span> <small>${horaStr}</small></div>`;
+                                hayAlertaActiva = true; 
+                            }
+                            
+                            L.circle([s.lat, s.lng], { 
+                                radius: s.mag * 5000, 
+                                color: s.mag >= 5 ? '#ff4444' : '#ffa500', 
+                                fillOpacity: 0.5,
+                                weight: 2
+                            }).bindPopup(`
+                                <div style="text-align:center">
+                                    <b style="font-size:16px; color:#ff4444">${s.mag} Mag</b><br>
+                                    <span>${s.place}</span><br>
+                                    <small style="color:#888">${horaStr}<br>${Math.round(dist)}km de distancia</small>
+                                </div>
+                            `).addTo(capaSismos);
                         }
-
-                        L.rectangle([[s.lat-0.5, s.lng-0.5], [s.lat+0.5, s.lng+0.5]], {
-                            color: s.riesgo === "alto" ? "red" : (s.riesgo === "medio" ? "orange" : "green"),
-                            stroke: false, fillOpacity: 0.5, interactive: false
-                        }).addTo(capaSismos);
                     });
 
-                    document.getElementById('event-log').innerHTML = logHTML || "<div style='text-align:center;color:#555;'>Sin actividad</div>";
+                    document.getElementById('event-log').innerHTML = logHTML || "Sin actividad en rango";
                     
-                    if (hayPeligro && alertaHabilitada) {
+                    if (hayAlertaActiva && alertaHabilitada) {
                         document.getElementById('alert-overlay').style.display = 'block';
-                        if (!alarmInterval) alarmInterval = setInterval(beep, 800);
+                        if (!alarmInterval) alarmInterval = setInterval(beep, 600);
                     } else {
-                        detenerEfectos();
+                        document.getElementById('alert-overlay').style.display = 'none';
+                        clearInterval(alarmInterval); alarmInterval = null;
                     }
-                });
+                    setTimeout(() => led.classList.remove('led-active'), 500);
+                })
+                .catch(e => console.log("Esperando conexión..."));
         }
 
-        // --- TEST CORREGIDO ---
         document.getElementById('btn-test').onclick = function() {
-            if(!userLocation) return alert("Esperando ubicación...");
-            
-            // 1. Crear el rectángulo de test manualmente
-            const testLat = userLocation.lat + 0.1;
-            const testLng = userLocation.lng + 0.1;
-            
-            const rectTest = L.rectangle([[testLat-0.5, testLng-0.5], [testLat+0.5, testLng+0.5]], {
-                color: 'purple', weight: 3, fillOpacity: 0.8, interactive: false
-            }).addTo(map); // Se agrega directo al mapa para que ignore el canvas si es necesario
-
-            // 2. Forzar efectos
+            if(!audioCtx) audioCtx = new AudioContext();
             document.getElementById('alert-overlay').style.display = 'block';
-            let oldHabilitada = alertaHabilitada;
-            alertaHabilitada = true; // Forzamos audio
-            if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
-            
-            let testInterval = setInterval(beep, 400);
-
-            // 3. Limpiar tras 4 segundos
-            setTimeout(() => {
-                map.removeLayer(rectTest);
-                clearInterval(testInterval);
+            let tInt = setInterval(beep, 200);
+            setTimeout(() => { 
+                clearInterval(tInt); 
                 document.getElementById('alert-overlay').style.display = 'none';
-                alertaHabilitada = oldHabilitada;
-                if(!alertaHabilitada) detenerEfectos();
-            }, 4000);
+            }, 2000);
         };
 
+        cargarSismos();
         setInterval(cargarSismos, 30000);
     </script>
 </body>

@@ -1,42 +1,44 @@
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse # <--- NUEVO
-import requests
+import httpx
 import sqlite3
-from datetime import datetime
+import joblib
+import numpy as np
 
 app = FastAPI()
 
+# Permitir que el mapa (HTML) se conecte al servidor
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
-    allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-USGS_URL = "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_day.geojson"
 DB_NAME = "sismos_history.db"
+# URL de la semana para tener datos suficientes para la IA
+USGS_URL = USGS_URL = "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_day.geojson"
 
-# --- RUTA PARA MOSTRAR TU MAPA ---
-@app.get("/")
-async def read_index():
-    # Esto hace que cuando alguien entre al link, vea tu index.html
-    return FileResponse('index.html')
+# --- CARGA DE INTELIGENCIA ARTIFICIAL ---
+try:
+    modelo_ia = joblib.load('modelo_sismos.pkl')
+    print("🧠 Inteligencia Artificial cargada correctamente.")
+except:
+    modelo_ia = None
+    print("⚠️ No se encontró el modelo de IA. Ejecutá primero entrenar_ia.py")
 
-# --- INICIALIZACIÓN DE BASE DE DATOS ---
+# Crear la base de datos si no existe
 def init_db():
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS sismos (
             id TEXT PRIMARY KEY,
-            lat REAL,
-            lng REAL,
             mag REAL,
             place TEXT,
             time INTEGER,
-            riesgo TEXT
+            lat REAL,
+            lng REAL
         )
     ''')
     conn.commit()
@@ -44,46 +46,60 @@ def init_db():
 
 init_db()
 
-def calcular_riesgo(mag):
-    if mag >= 5: return "alto"
-    elif mag >= 3: return "medio"
-    else: return "bajo"
-
 @app.get("/sismos")
-def obtener_sismos():
-    try:
-        response = requests.get(USGS_URL, timeout=10)
+async def get_sismos():
+    async with httpx.AsyncClient() as client:
+        response = await client.get(USGS_URL)
         data = response.json()
+    
+    sismos_procesados = []
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+
+    for feature in data['features']:
+        prop = feature['properties']
+        geom = feature['geometry']
         
-        conn = sqlite3.connect(DB_NAME)
-        cursor = conn.cursor()
-
-        for evento in data["features"]:
-            id_sismo = evento["id"]
-            prop = evento["properties"]
-            geom = evento["geometry"]["coordinates"]
-            
-            mag = prop.get("mag")
-            if mag is None: continue
-
-            cursor.execute('''
-                INSERT OR IGNORE INTO sismos (id, lat, lng, mag, place, time, riesgo)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            ''', (id_sismo, geom[1], geom[0], mag, prop.get("place"), prop.get("time"), calcular_riesgo(mag)))
-
-        conn.commit()
+        sismo = {
+            "id": feature['id'],
+            "mag": prop['mag'],
+            "place": prop['place'],
+            "time": prop['time'],
+            "lat": geom['coordinates'][1],
+            "lng": geom['coordinates'][0]
+        }
         
-        cursor.execute("SELECT lat, lng, mag, place, riesgo FROM sismos ORDER BY time DESC LIMIT 200")
-        rows = cursor.fetchall()
-        conn.close()
+        # Guardar en la base de datos para que la IA siga aprendiendo
+        cursor.execute('''
+            INSERT OR IGNORE INTO sismos (id, mag, place, time, lat, lng)
+            VALUES (?, ?, ?, ?, ?, ?)
+        ''', (sismo['id'], sismo['mag'], sismo['place'], sismo['time'], sismo['lat'], sismo['lng']))
+        
+        sismos_procesados.append(sismo)
 
-        resultado = []
-        for r in rows:
-            resultado.append({
-                "lat": r[0], "lng": r[1], "magnitud_promedio": r[2],
-                "ubicacion": r[3], "riesgo": r[4]
-            })
-        return resultado
+    conn.commit()
+    conn.close()
+    return sismos_procesados
 
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=str(e))
+# --- NUEVO ENDPOINT DE IA ---
+@app.get("/prediccion_ia")
+def predecir_importancia(lat: float, lng: float):
+    if modelo_ia:
+        try:
+            # La IA predice la magnitud probable según la ubicación
+            prediccion = modelo_ia.predict([[lat, lng]])
+            return {
+                "status": "success",
+                "lat": lat,
+                "lng": lng,
+                "magnitud_predicha": round(float(prediccion[0]), 2),
+                "mensaje": "Análisis realizado por el modelo RandomForest"
+            }
+        except Exception as e:
+            return {"status": "error", "detalle": str(e)}
+    
+    return {"status": "error", "mensaje": "Modelo IA no cargado"}
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run(app, host="0.0.0.0", port=8000)
