@@ -3,214 +3,218 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>SismoAlert Chile - Pro + IA</title>
-    <link rel="stylesheet" href="https://unpkg.com/leaflet/dist/leaflet.css" />
+    <title>SismoAlert Chile - Sistema Integral</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
     <style>
-        body { margin: 0; padding: 0; background-color: #0a0a0a; font-family: 'Segoe UI', sans-serif; overflow: hidden; color: white; }
+        body { margin: 0; padding: 0; font-family: 'Segoe UI', sans-serif; background-color: #121212; color: white; }
         #map { height: 100vh; width: 100%; }
-        .dashboard { position: absolute; top: 10px; left: 10px; z-index: 1000; background: rgba(15, 15, 15, 0.9); padding: 20px; border-radius: 12px; border: 1px solid #444; width: 320px; backdrop-filter: blur(10px); }
         
-        .status-bar { display: flex; align-items: center; justify-content: space-between; margin-bottom: 15px; font-size: 11px; color: #aaa; }
-        .led { width: 8px; height: 8px; border-radius: 50%; background: #27ae60; margin-right: 5px; display: inline-block; }
-        .led-active { animation: blink 1s infinite; }
-        @keyframes blink { 0% { opacity: 1; } 50% { opacity: 0.3; } 100% { opacity: 1; } }
+        /* Panel Único Flotante */
+        .control-panel {
+            position: absolute; top: 20px; left: 20px; z-index: 1000;
+            background: rgba(30, 30, 30, 0.95); padding: 20px; border-radius: 12px;
+            width: 320px; border: 1px solid #444; box-shadow: 0 8px 32px rgba(0,0,0,0.8);
+            max-height: 90vh; display: flex; flex-direction: column;
+        }
 
-        .stat-card { background: #151515; padding: 10px; border-radius: 8px; margin-bottom: 10px; border-left: 4px solid #ff4444; }
-        .stat-val { font-size: 20px; font-weight: bold; display: block; }
-        .stat-label { font-size: 10px; color: #888; text-transform: uppercase; }
+        h1 { font-size: 1.3rem; margin: 0; color: #ff4d4d; }
+        .status-dot { height: 10px; width: 10px; border-radius: 50%; display: inline-block; margin-right: 5px; }
+        .online { background-color: #2ecc71; box-shadow: 0 0 8px #2ecc71; }
+        .offline { background-color: #e74c3c; box-shadow: 0 0 8px #e74c3c; }
         
-        #event-log { margin-top: 15px; max-height: 200px; overflow-y: auto; font-size: 12px; background: rgba(0,0,0,0.4); border-radius: 8px; padding: 10px; border: 1px solid #333; }
-        #event-log::-webkit-scrollbar { width: 6px; }
-        #event-log::-webkit-scrollbar-thumb { background: #444; border-radius: 10px; }
-        
-        .log-item { border-bottom: 1px solid #222; padding: 8px 0; display: flex; justify-content: space-between; }
-        .log-item b { color: #ff4444; }
+        .slider-container { margin-top: 15px; }
+        label { display: block; font-size: 0.75rem; color: #aaa; margin-bottom: 5px; }
+        input[type=range] { width: 100%; cursor: pointer; accent-color: #ff4d4d; }
+        .val-display { float: right; color: #fff; font-weight: bold; }
 
-        #alert-overlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(255, 0, 0, 0.2); z-index: 9998; pointer-events: none; animation: pulse 0.8s infinite; }
-        @keyframes pulse { 0% { opacity: 0.1; } 50% { opacity: 0.4; } 100% { opacity: 0.1; } }
-        
-        button { border: none; padding: 12px; border-radius: 6px; font-weight: bold; cursor: pointer; width: 100%; margin-top: 5px; }
-        .btn-off { background: #27ae60; color: white; }
-        .btn-on { background: #e74c3c; color: white; }
-        .btn-test { background: #34495e; color: #ccc; font-size: 11px; margin-top: 10px; }
-        
-        .leaflet-popup-content-wrapper { background: #151515 !important; color: white !important; border: 1px solid #444; }
-        .leaflet-popup-tip { background: #151515 !important; }
+        #result-box { 
+            margin-top: 15px; padding: 12px; background: #222; 
+            border-left: 4px solid #f1c40f; border-radius: 4px;
+        }
+
+        /* Listado con Scroll */
+        #sismo-list-container {
+            margin-top: 15px;
+            overflow-y: auto;
+            flex-grow: 1;
+            padding-right: 5px;
+            border-top: 1px solid #333;
+            padding-top: 10px;
+        }
+        /* Scrollbar personalizado para que no sea feo */
+        #sismo-list-container::-webkit-scrollbar { width: 4px; }
+        #sismo-list-container::-webkit-scrollbar-thumb { background: #444; border-radius: 10px; }
+
+        .sismo-item { 
+            background: rgba(255,255,255,0.05); padding: 10px; margin-bottom: 6px; 
+            border-radius: 4px; cursor: pointer; border-left: 3px solid #ff4d4d; transition: 0.2s;
+        }
+        .sismo-item:hover { background: rgba(255,255,255,0.1); }
+        .sismo-item b { color: #ff4d4d; font-size: 0.9rem; }
+        .sismo-item p { margin: 3px 0 0; font-size: 0.7rem; color: #aaa; }
     </style>
 </head>
 <body>
-    <div id="alert-overlay"></div>
-    <div class="dashboard">
-        <div class="status-bar">
-            <span>SISTEMA: <span id="status-text">CONECTADO</span></span>
-            <div id="status-led" class="led"></div>
+
+    <div class="control-panel">
+        <div style="display: flex; align-items: center; justify-content: space-between; margin-bottom: 5px;">
+            <span style="font-size: 0.7rem;">SISTEMA: <span id="status-text">CONECTANDO...</span></span>
+            <span id="status-dot" class="status-dot"></span>
         </div>
-        <h2 style="margin: 0 0 10px 0; font-size: 18px;">🛰️ SismoAlert <span style="color:#ff4444">Chile</span></h2>
+        <h1>SismoAlert <span>Chile</span></h1>
         
-        <div class="stat-card">
-            <span id="dist-display" class="stat-val">2500 km</span>
-            <span class="stat-label">Radio de Cobertura</span>
-            <input type="range" id="dist-slider" min="100" max="2500" step="100" value="2500" style="width: 100%;">
+        <div class="slider-container">
+            <label>RADIO DE COBERTURA <span id="range-val" class="val-display">1300 km</span></label>
+            <input type="range" id="range-slider" min="100" max="5000" value="1300">
         </div>
 
-        <div class="stat-card">
-            <span id="mag-display" class="stat-val">1.5 Mag</span>
-            <span class="stat-label">Sensibilidad Mínima</span>
-            <input type="range" id="mag-slider" min="1" max="8" step="0.5" value="1.5" style="width: 100%;">
+        <div class="slider-container">
+            <label>SENSIBILIDAD MÍNIMA <span id="mag-val" class="val-display">1 Mag</span></label>
+            <input type="range" id="mag-slider" min="0" max="9" step="0.1" value="1">
         </div>
 
-        <button id="btn-toggle" class="btn-off">🔊 ARMAR SISTEMA</button>
-        <button id="btn-test" class="btn-test">🛠️ DIAGNÓSTICO DE SISTEMA</button>
-        
-        <div id="event-log">Sincronizando satélites...</div>
+        <div id="result-box">
+            <span style="font-size: 0.7rem; color: #888;">IA: ESTIMACIÓN LOCAL</span>
+            <div id="prediction-val" style="font-size: 1.4rem; font-weight: bold; color: #f1c40f;">- Mag</div>
+        </div>
+
+        <!-- El nuevo listado va aquí adentro -->
+        <div id="sismo-list-container">
+            <span style="font-size: 0.7rem; color: #666; display: block; margin-bottom: 10px;">SISMOS EN TU RANGO:</span>
+            <div id="sismo-container"></div>
+        </div>
     </div>
-    
+
     <div id="map"></div>
 
-    <script src="https://unpkg.com/leaflet/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script>
-        // Configuración inicial del mapa
-        var map = L.map('map', { zoomControl: true }).setView([-33.45, -70.66], 5);
+        const API_URL = 'https://sismoalert.onrender.com';
+        const USGS_URL = 'https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_day.geojson';
+
+        let centerLat = -33.44;
+        let centerLng = -70.66;
+        const map = L.map('map').setView([centerLat, centerLng], 5);
         L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png').addTo(map);
 
-        var userLocation = { lat: -33.45, lng: -70.66 };
-        var audioCtx = null;
-        var alarmInterval = null;
-        var alertRadius = 2500;
-        var minMagnitude = 1.5;
-        var alertaHabilitada = false;
-        var capaSismos = L.layerGroup().addTo(map);
-        var radioVisual = L.circle(userLocation, {radius: 2500000, color: '#ff4444', weight: 1, fillOpacity: 0.05}).addTo(map);
+        let sismosLayer = L.layerGroup().addTo(map);
+        let coverageCircle = null;
 
-        // --- FUNCIÓN DE PREDICCIÓN POR IA (AL HACER CLIC) ---
-        function onMapClick(e) {
-            const lat = e.latlng.lat.toFixed(4);
-            const lng = e.latlng.lng.toFixed(4);
+        function getDistance(lat1, lon1, lat2, lon2) {
+            const R = 6371;
+            const dLat = (lat2-lat1) * Math.PI / 180;
+            const dLon = (lon2-lon1) * Math.PI / 180;
+            const a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+                    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) * 
+                    Math.sin(dLon/2) * Math.sin(dLon/2);
+            return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+        }
 
-            const popup = L.popup()
-                .setLatLng(e.latlng)
-                .setContent('<div style="color:white; background:#151515; padding:5px;">🧠 IA Analizando...</div>')
-                .openOn(map);
+        async function updateSismos() {
+            try {
+                const range = parseFloat(document.getElementById('range-slider').value);
+                const minMag = parseFloat(document.getElementById('mag-slider').value);
+                const container = document.getElementById('sismo-container');
+                
+                if (coverageCircle) {
+                    coverageCircle.setRadius(range * 1000);
+                    coverageCircle.setLatLng([centerLat, centerLng]);
+                } else {
+                    coverageCircle = L.circle([centerLat, centerLng], {
+                        radius: range * 1000, color: '#ff4d4d', fillOpacity: 0.05, weight: 1, dashArray: '5, 10'
+                    }).addTo(map);
+                }
 
-            fetch(`http://127.0.0.1:8000/prediccion_ia?lat=${lat}&lng=${lng}`)
-                .then(res => res.json())
-                .then(data => {
-                    if (data.status === "success") {
-                        popup.setContent(`
-                            <div style="text-align:center; padding:10px; min-width:150px;">
-                                <b style="color:#00ff88; font-size:12px;">🧠 PREDICCIÓN IA</b><br>
-                                <hr style="border:0.5px solid #444; margin:8px 0;">
-                                <span style="font-size:22px; font-weight:bold;">${data.magnitud_predicha}</span><br>
-                                <small style="color:#aaa;">Magnitud Estimada</small><br>
-                                <div style="margin-top:8px; font-size:9px; color:#555;">ZONA: ${lat}, ${lng}</div>
-                            </div>
-                        `);
-                    }
-                })
-                .catch(err => {
-                    popup.setContent("⚠️ Error: ¿Servidor prendido?");
+                const response = await fetch(USGS_URL);
+                const data = await response.json();
+                
+                sismosLayer.clearLayers();
+                container.innerHTML = ""; 
+
+                const sismosFiltrados = data.features.filter(f => {
+                    const d = getDistance(centerLat, centerLng, f.geometry.coordinates[1], f.geometry.coordinates[0]);
+                    return d <= range && f.properties.mag >= minMag;
+                }).sort((a, b) => b.properties.mag - a.properties.mag);
+
+                sismosFiltrados.forEach(f => {
+                    const coords = [f.geometry.coordinates[1], f.geometry.coordinates[0]];
+                    const mag = f.properties.mag;
+                    const place = f.properties.place;
+
+                    const m = L.circleMarker(coords, {
+                        radius: mag * 2.5, fillColor: "#ff4d4d", color: "#fff", weight: 1, fillOpacity: 0.7
+                    }).bindPopup(`<b>Sismo Real</b><br>Mag: ${mag}<br>${place}`).addTo(sismosLayer);
+
+                    const item = document.createElement('div');
+                    item.className = 'sismo-item';
+                    item.innerHTML = `<b>${mag} Mag</b><p>${place}</p>`;
+                    item.onclick = () => { map.setView(coords, 8); m.openPopup(); };
+                    container.appendChild(item);
                 });
+
+                if(sismosFiltrados.length === 0) {
+                    container.innerHTML = "<p style='font-size:0.7rem; color:#555;'>Sin sismos en la zona.</p>";
+                }
+
+            } catch (e) { console.error(e); }
         }
 
-        map.on('click', onMapClick);
-
-        // --- LÓGICA DE ALERTAS Y DATOS ---
-        function actualizarCirculo() {
-            radioVisual.setLatLng(userLocation).setRadius(alertRadius * 1000);
-        }
-
-        document.getElementById('dist-slider').oninput = function() {
-            alertRadius = this.value;
-            document.getElementById('dist-display').innerText = this.value + " km";
-            actualizarCirculo();
-            cargarSismos();
+        document.getElementById('range-slider').oninput = function() {
+            document.getElementById('range-val').innerText = this.value + " km";
+            updateSismos();
         };
-
         document.getElementById('mag-slider').oninput = function() {
-            minMagnitude = parseFloat(this.value);
-            document.getElementById('mag-display').innerText = this.value + " Mag";
-            cargarSismos();
+            document.getElementById('mag-val').innerText = this.value + " Mag";
+            updateSismos();
         };
 
-        function beep() {
-            if (!audioCtx || !alertaHabilitada) return;
-            let osc = audioCtx.createOscillator();
-            let gain = audioCtx.createGain();
-            osc.type = 'sawtooth'; osc.frequency.value = 880;
-            gain.gain.value = 0.05;
-            osc.connect(gain); gain.connect(audioCtx.destination);
-            osc.start(); osc.stop(audioCtx.currentTime + 0.1);
+        async function checkStatus() {
+            try {
+                const res = await fetch(API_URL + '/');
+                if (res.ok) {
+                    document.getElementById('status-dot').className = 'status-dot online';
+                    document.getElementById('status-text').innerText = 'CONECTADO';
+                }
+            } catch (e) {
+                document.getElementById('status-dot').className = 'status-dot offline';
+                document.getElementById('status-text').innerText = 'OFFLINE';
+            }
         }
 
-        document.getElementById('btn-toggle').onclick = function() {
-            alertaHabilitada = !alertaHabilitada;
-            this.className = alertaHabilitada ? "btn-on" : "btn-off";
-            this.innerHTML = alertaHabilitada ? "🛑 SILENCIAR" : "🔊 ARMAR SISTEMA";
-            if (alertaHabilitada && !audioCtx) audioCtx = new AudioContext();
-        };
+        let currentMarker = null;
+        map.on('click', async function(e) {
+            const { lat, lng } = e.latlng;
+            if(currentMarker) map.removeLayer(currentMarker);
+            currentMarker = L.marker([lat, lng]).addTo(map).bindPopup("IA analizando...").openPopup();
+            try {
+                const res = await fetch(`${API_URL}/predict`, {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ latitud: lat, longitud: lng })
+                });
+                const d = await res.json();
+                if (res.ok) {
+                    document.getElementById('result-box').style.display = 'block';
+                    document.getElementById('prediction-val').innerText = d.magnitud_estimada + " Mag";
+                    currentMarker.setPopupContent(`<b>IA: Probable ${d.magnitud_estimada}</b>`).openPopup();
+                }
+            } catch (err) { currentMarker.setPopupContent("IA no disponible").openPopup(); }
+        });
 
-        function cargarSismos() {
-            const led = document.getElementById('status-led');
-            led.classList.add('led-active');
-            
-            fetch("http://127.0.0.1:8000/sismos")
-                .then(res => res.json())
-                .then(data => {
-                    capaSismos.clearLayers();
-                    let logHTML = "";
-                    let hayAlertaActiva = false;
-
-                    data.forEach(s => {
-                        let dist = map.distance(userLocation, [s.lat, s.lng]) / 1000;
-                        let horaStr = new Date(s.time).toLocaleTimeString();
-
-                        if (s.mag >= minMagnitude) {
-                            if (dist <= alertRadius) {
-                                logHTML += `<div class="log-item"><span><b>${s.mag}</b> - ${s.place}</span> <small>${horaStr}</small></div>`;
-                                hayAlertaActiva = true; 
-                            }
-                            
-                            L.circle([s.lat, s.lng], { 
-                                radius: s.mag * 5000, 
-                                color: s.mag >= 5 ? '#ff4444' : '#ffa500', 
-                                fillOpacity: 0.5,
-                                weight: 2
-                            }).bindPopup(`
-                                <div style="text-align:center">
-                                    <b style="font-size:16px; color:#ff4444">${s.mag} Mag</b><br>
-                                    <span>${s.place}</span><br>
-                                    <small style="color:#888">${horaStr}<br>${Math.round(dist)}km de distancia</small>
-                                </div>
-                            `).addTo(capaSismos);
-                        }
-                    });
-
-                    document.getElementById('event-log').innerHTML = logHTML || "Sin actividad en rango";
-                    
-                    if (hayAlertaActiva && alertaHabilitada) {
-                        document.getElementById('alert-overlay').style.display = 'block';
-                        if (!alarmInterval) alarmInterval = setInterval(beep, 600);
-                    } else {
-                        document.getElementById('alert-overlay').style.display = 'none';
-                        clearInterval(alarmInterval); alarmInterval = null;
-                    }
-                    setTimeout(() => led.classList.remove('led-active'), 500);
-                })
-                .catch(e => console.log("Esperando conexión..."));
+        function localizarUsuario() {
+            if ("geolocation" in navigator) {
+                navigator.geolocation.getCurrentPosition((position) => {
+                    centerLat = position.coords.latitude;
+                    centerLng = position.coords.longitude;
+                    L.circleMarker([centerLat, centerLng], { radius: 8, fillColor: "#3498db", color: "#fff", weight: 2, fillOpacity: 1 }).addTo(map).bindPopup("Tú");
+                    map.setView([centerLat, centerLng], 6);
+                    updateSismos();
+                }, () => updateSismos());
+            } else { updateSismos(); }
         }
 
-        document.getElementById('btn-test').onclick = function() {
-            if(!audioCtx) audioCtx = new AudioContext();
-            document.getElementById('alert-overlay').style.display = 'block';
-            let tInt = setInterval(beep, 200);
-            setTimeout(() => { 
-                clearInterval(tInt); 
-                document.getElementById('alert-overlay').style.display = 'none';
-            }, 2000);
-        };
-
-        cargarSismos();
-        setInterval(cargarSismos, 30000);
+        localizarUsuario();
+        checkStatus();
     </script>
 </body>
 </html>
