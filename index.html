@@ -57,7 +57,8 @@
         .sismo-real { border-right: 5px solid #ff4d4d; border-left: 1px solid rgba(255, 77, 77, 0.3); }
         .anomalia-ia { border-right: 5px solid #f1c40f; opacity: 0.8; }
         .mag-text { font-size: 1.3rem; font-weight: 900; display: block; }
-        .place { font-size: 0.8rem; color: #999; }
+        .place { font-size: 0.8rem; color: #999; display: block; margin-bottom: 4px; }
+        .sources-badge { font-size: 0.65rem; background: #2d2d2d; color: #aaa; padding: 2px 6px; border-radius: 4px; font-weight: bold; display: inline-block; }
     </style>
 </head>
 <body>
@@ -93,13 +94,13 @@
 
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script>
-        const API_URL = 'http://localhost:8000';
-        const USGS_URL = 'https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_day.geojson';
+        const API_URL = 'https://sismoalert.onrender.com';
         
         // Motor de Audio Sintético (Evita bloqueos de navegador)
         let audioCtx = null;
         let oscillator = null;
         let gainNode = null;
+        let alarmaInterval = null;
 
         function iniciarSirena() {
             if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
@@ -124,13 +125,13 @@
                     }
                 };
                 sweepAlarma();
-                this.alarmaInterval = setInterval(sweepAlarma, 1000);
+                alarmaInterval = setInterval(sweepAlarma, 1000);
             }
         }
 
         function detenerSirena() {
             if (oscillator) {
-                clearInterval(this.alarmaInterval);
+                clearInterval(alarmaInterval);
                 oscillator.stop();
                 oscillator.disconnect();
                 oscillator = null;
@@ -179,19 +180,15 @@
             circuloRango.setRadius(radioKm * 1000);
 
             try {
-                const res = await fetch(USGS_URL);
+                // Consultamos directamente al backend multifuente activo en Render
+                const res = await fetch(`${API_URL}/sismos_unificados`);
                 const data = await res.json();
-                const enRango = data.features.filter(f => {
-                    const d = map.distance([miUbicacion.lat, miUbicacion.lng], [f.geometry.coordinates[1], f.geometry.coordinates[0]]) / 1000;
-                    return d <= radioKm && f.properties.mag >= minMag;
-                }).map(f => ({ id: f.id, lat: f.geometry.coordinates[1], lng: f.geometry.coordinates[0], mag: f.properties.mag, place: f.properties.place }));
-
-                const aiRes = await fetch(`${API_URL}/filter_signals`, {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(enRango)
+                
+                // Filtramos localmente según los controles interactivos del usuario
+                const processed = data.filter(s => {
+                    const d = map.distance([miUbicacion.lat, miUbicacion.lng], [s.lat, s.lng]) / 1000;
+                    return d <= radioKm && s.mag_original >= minMag;
                 });
-                const processed = await aiRes.json();
                 
                 sismosLayer.clearLayers();
                 document.getElementById('sismos-container').innerHTML = "";
@@ -200,18 +197,31 @@
                 let haySismoRojo = false;
 
                 processed.forEach(s => {
-                    // Mantener estado rojo inmutable
+                    // Mantener estado de anomalías inmutable
                     if (!sismosInmutables.has(s.id)) sismosInmutables.set(s.id, s.es_anomalia);
                     else if (sismosInmutables.get(s.id) === false) s.es_anomalia = false;
 
                     const color = s.es_anomalia ? "#f1c40f" : "#ff4d4d";
                     if (!s.es_anomalia) haySismoRojo = true;
 
-                    L.circleMarker([s.lat, s.lng], { radius: s.mag_original * 3.8, fillColor: color, color: "#fff", weight: 1.5, fillOpacity: 0.85 }).addTo(sismosLayer);
+                    L.circleMarker([s.lat, s.lng], { 
+                        radius: s.mag_original * 3.8, 
+                        fillColor: color, 
+                        color: "#fff", 
+                        weight: 1.5, 
+                        fillOpacity: 0.85 
+                    }).addTo(sismosLayer);
 
+                    // Creamos el elemento en la interfaz detallando las fuentes combinadas
                     const div = document.createElement('div');
                     div.className = s.es_anomalia ? 'item anomalia-ia' : 'item sismo-real';
-                    div.innerHTML = `<span class="mag-text" style="color:${color}">${s.mag_original} Mag</span><span class="place">${s.place}</span>`;
+                    
+                    const fuentesTexto = s.fuentes.join(', ');
+                    div.innerHTML = `
+                        <span class="mag-text" style="color:${color}">${s.mag_original} Mag</span>
+                        <span class="place">${s.place}</span>
+                        <span class="sources-badge">📡 ${fuentesTexto}</span>
+                    `;
                     
                     if (s.es_anomalia) document.getElementById('anomalias-container').appendChild(div);
                     else document.getElementById('sismos-container').appendChild(div);
@@ -224,7 +234,9 @@
                     detenerSirena();
                 }
 
-            } catch (e) { console.error("Error al actualizar datos."); }
+            } catch (e) { 
+                console.error("Error al actualizar datos unificados desde Render:", e); 
+            }
         }
 
         document.getElementById('range-slider').oninput = function() {
@@ -236,7 +248,9 @@
             updateSismos();
         };
 
+        // Primera ejecución
         updateSismos();
+        // Consultas automáticas cada 10 segundos
         setInterval(updateSismos, 10000);
     </script>
 </body>
