@@ -110,13 +110,15 @@ async def sismos_background_worker():
                 todos = lista_usgs + lista_emsc
                 unificados = []
 
-                # Algoritmo de Deduplicación veloz en memoria
+                # Algoritmo de Deduplicación veloz en memoria (CORREGIDO)
                 for sismo in todos:
                     duplicado = False
                     for u in unificados:
                         distancia = calcular_distancia(sismo["lat"], sismo["lng"], u["lat"], u["lng"])
                         diff_tiempo = abs(sismo["time"] - u["time"])
-                        if distance < 50.0 and diff_tiempo < 120:
+                        
+                        # CORRECCIÓN AQUÍ: Usamos 'distancia' en lugar de 'distance'
+                        if distancia < 50.0 and diff_tiempo < 120:
                             duplicado = True
                             if sismo["fuente"] not in u["fuentes_confirmadas"]:
                                 u["fuentes_confirmadas"].append(sismo["fuente"])
@@ -154,7 +156,6 @@ async def sismos_background_worker():
             except Exception as e:
                 print(f"Error en ciclo del Worker: {e}")
             
-            # Intervalo de actualización: cada 10 segundos consulta las APIs en background
             await asyncio.sleep(10)
 
 # Manejo del ciclo de vida de FastAPI
@@ -183,7 +184,6 @@ async def sismos_unificados():
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
     
-    # Traemos los sismos más recientes directamente de nuestra base de datos local
     cursor.execute("SELECT * FROM sismos ORDER BY timestamp DESC LIMIT 100")
     rows = cursor.fetchall()
     conn.close()
