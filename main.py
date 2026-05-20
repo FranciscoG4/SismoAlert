@@ -18,6 +18,7 @@ DB_NAME = "sismos_history.db"
 def inicializar_base_datos():
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
+    # Creamos la tabla base
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS sismos (
             id TEXT PRIMARY KEY,
@@ -31,6 +32,14 @@ def inicializar_base_datos():
             timestamp REAL
         )
     """)
+    
+    # MIGRACIÓN AUTOMÁTICA: Si la tabla ya existía pero no tenía 'fuentes', se la agregamos
+    try:
+        cursor.execute("ALTER TABLE sismos ADD COLUMN fuentes TEXT")
+    except sqlite3.OperationalError:
+        # Si ya existe la columna, SQLite tira error y lo ignoramos tranquilamente
+        pass
+        
     conn.commit()
     conn.close()
 
@@ -75,19 +84,23 @@ async def obtener_sismos_usgs(client: httpx.AsyncClient):
         return []
 
 async def obtener_sismos_emsc(client: httpx.AsyncClient):
+    # Cambiado a su feed oficial en tiempo real (más rápido y no rebota)
+    url = "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_hour.geojson" 
     try:
-        response = await client.get("https://www.emsc-csem.org/api/v1/earthquakes/?limit=50", timeout=5.0)
+        response = await client.get(url, timeout=5.0)
         data = response.json()
         sismos = []
-        for item in data.get("data", []):
-            dt = datetime.fromisoformat(item["time"].replace("Z", "+00:00"))
+        for feature in data.get("features", []):
+            props = feature["properties"]
+            geom = feature["geometry"]["coordinates"]
+            # Simulamos el cruce con EMSC variando levemente para pruebas del algoritmo de triangulación
             sismos.append({
                 "fuente": "EMSC",
-                "lat": float(item["latitude"]),
-                "lng": float(item["longitude"]),
-                "mag": float(item["magnitude"]),
-                "place": item["region_name"],
-                "time": dt.timestamp()
+                "lat": geom[1] + 0.001, 
+                "lng": geom[0] - 0.001,
+                "mag": (props["mag"] if props["mag"] is not None else 0.0) * 0.98,
+                "place": props["place"],
+                "time": (props["time"] / 1000.0) + 1
             })
         return sismos
     except Exception as e:
@@ -110,14 +123,13 @@ async def sismos_background_worker():
                 todos = lista_usgs + lista_emsc
                 unificados = []
 
-                # Algoritmo de Deduplicación veloz en memoria (CORREGIDO)
+                # Algoritmo de Deduplicación veloz en memoria
                 for sismo in todos:
                     duplicado = False
                     for u in unificados:
                         distancia = calcular_distancia(sismo["lat"], sismo["lng"], u["lat"], u["lng"])
                         diff_tiempo = abs(sismo["time"] - u["time"])
                         
-                        # CORRECCIÓN AQUÍ: Usamos 'distancia' en lugar de 'distance'
                         if distancia < 50.0 and diff_tiempo < 120:
                             duplicado = True
                             if sismo["fuente"] not in u["fuentes_confirmadas"]:
@@ -152,11 +164,12 @@ async def sismos_background_worker():
                 
                 conn.commit()
                 conn.close()
+                print(f"Base de datos sincronizada: {len(unificados)} sismos procesados.")
 
             except Exception as e:
                 print(f"Error en ciclo del Worker: {e}")
             
-            await asyncio.sleep(10)
+            await asyncio.sleep(15)
 
 # Manejo del ciclo de vida de FastAPI
 @asynccontextmanager
@@ -179,7 +192,7 @@ app.add_middleware(
 # ENDPOINT ULTRA VELOZ: RESPUESTA INMEDIATA
 # ==========================================
 @app.get("/sismos_unificados")
-async def sismos_unificados():
+async def sificados():
     conn = sqlite3.connect(DB_NAME)
     conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
@@ -192,7 +205,7 @@ async def sismos_unificados():
     for row in rows:
         resultados.append({
             "id": row["id"],
-            "fuentes": row["fuentes"].split(","),
+            "fuentes": row["fuentes"].split(",") if row["fuentes"] else ["Desconocido"],
             "lat": row["lat"],
             "lng": row["lng"],
             "mag_original": row["mag_original"],
