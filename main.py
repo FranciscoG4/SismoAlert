@@ -8,18 +8,9 @@ from math import radians, cos, sin, asin, sqrt
 from datetime import datetime
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from typing import List
+from contextlib import asynccontextmanager
 
-app = FastAPI()
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-DB_NAME = "sismos_history"
+DB_NAME = "sismos_history.db"
 
 # ==========================================
 # CONFIGURACIÓN DE BASE DE DATOS (SQLite)
@@ -43,8 +34,6 @@ def inicializar_base_datos():
     conn.commit()
     conn.close()
 
-inicializar_base_datos()
-
 # Carga del modelo de IA
 modelo = None
 try:
@@ -58,9 +47,11 @@ def calcular_distancia(lat1, lon1, lat2, lon2):
     dlat = lat2 - lat1 
     a = sin(dlat/2)**2 + cos(lat1) * cos(lat2) * sin(dlon/2)**2
     c = 2 * asin(sqrt(a)) 
-    r = 6371 
-    return c * r
+    return c * 6371
 
+# ==========================================
+# RECOLECCIÓN ASINCRÓNICA DE FUENTES
+# ==========================================
 async def obtener_sismos_usgs(client: httpx.AsyncClient):
     url = "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_hour.geojson"
     try:
@@ -72,7 +63,6 @@ async def obtener_sismos_usgs(client: httpx.AsyncClient):
             geom = feature["geometry"]["coordinates"]
             sismos.append({
                 "fuente": "USGS",
-                "id_origen": feature["id"],
                 "lat": geom[1],
                 "lng": geom[0],
                 "mag": props["mag"] if props["mag"] is not None else 0.0,
@@ -81,7 +71,7 @@ async def obtener_sismos_usgs(client: httpx.AsyncClient):
             })
         return sismos
     except Exception as e:
-        print(f"Error consultando USGS: {e}")
+        print(f"Error en worker (USGS): {e}")
         return []
 
 async def obtener_sismos_emsc(client: httpx.AsyncClient):
@@ -93,7 +83,6 @@ async def obtener_sismos_emsc(client: httpx.AsyncClient):
             dt = datetime.fromisoformat(item["time"].replace("Z", "+00:00"))
             sismos.append({
                 "fuente": "EMSC",
-                "id_origen": str(item["id"]),
                 "lat": float(item["latitude"]),
                 "lng": float(item["longitude"]),
                 "mag": float(item["magnitude"]),
@@ -102,85 +91,118 @@ async def obtener_sismos_emsc(client: httpx.AsyncClient):
             })
         return sismos
     except Exception as e:
-        print(f"Error consultando EMSC: {e}")
+        print(f"Error en worker (EMSC): {e}")
         return []
 
 # ==========================================
-# ENDPOINT PRINCIPAL: MONITOREO Y PERSISTENCIA
+# WORKER EN SEGUNDO PLANO (BACKGROUND TASK)
+# ==========================================
+async def sismos_background_worker():
+    print("Worker de Sismos iniciado.")
+    async with httpx.AsyncClient() as client:
+        while True:
+            try:
+                lista_usgs, lista_emsc = await asyncio.gather(
+                    obtener_sismos_usgs(client),
+                    obtener_sismos_emsc(client)
+                )
+                
+                todos = lista_usgs + lista_emsc
+                unificados = []
+
+                # Algoritmo de Deduplicación veloz en memoria
+                for sismo in todos:
+                    duplicado = False
+                    for u in unificados:
+                        distancia = calcular_distancia(sismo["lat"], sismo["lng"], u["lat"], u["lng"])
+                        diff_tiempo = abs(sismo["time"] - u["time"])
+                        if distance < 50.0 and diff_tiempo < 120:
+                            duplicado = True
+                            if sismo["fuente"] not in u["fuentes_confirmadas"]:
+                                u["fuentes_confirmadas"].append(sismo["fuente"])
+                            break
+                    if not duplicado:
+                        sismo["fuentes_confirmadas"] = [sismo["fuente"]]
+                        unificados.append(sismo)
+
+                # Persistencia en base de datos
+                conn = sqlite3.connect(DB_NAME)
+                cursor = conn.cursor()
+
+                for s in unificados:
+                    id_cadena = f"{s['lat']}-{s['lng']}-{int(s['time'])}"
+                    id_propio = "SA-" + hashlib.md5(id_cadena.encode()).hexdigest()[:8].upper()
+                    
+                    id_hash = int(hashlib.md5(id_propio.encode()).hexdigest(), 16)
+                    es_anomalia = (id_hash % 100) < 20
+
+                    if modelo:
+                        input_df = pd.DataFrame([[s["lat"], s["lng"]]], columns=['latitud', 'longitud'])
+                        mag_ia = modelo.predict(input_df)[0]
+                    else:
+                        mag_ia = s["mag"]
+
+                    fuentes_str = ",".join(s["fuentes_confirmadas"])
+                    cursor.execute("""
+                        INSERT OR IGNORE INTO sismos (id, fuentes, lat, lng, mag_original, mag_ia, place, es_anomalia, timestamp)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (id_propio, fuentes_str, s["lat"], s["lng"], s["mag"], round(float(mag_ia), 2), s["place"], 1 if es_anomalia else 0, s["time"]))
+                
+                conn.commit()
+                conn.close()
+
+            except Exception as e:
+                print(f"Error en ciclo del Worker: {e}")
+            
+            # Intervalo de actualización: cada 10 segundos consulta las APIs en background
+            await asyncio.sleep(10)
+
+# Manejo del ciclo de vida de FastAPI
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    inicializar_base_datos()
+    worker_task = asyncio.create_task(sismos_background_worker())
+    yield
+    worker_task.cancel()
+
+app = FastAPI(lifespan=lifespan)
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
+
+# ==========================================
+# ENDPOINT ULTRA VELOZ: RESPUESTA INMEDIATA
 # ==========================================
 @app.get("/sismos_unificados")
 async def sismos_unificados():
-    async with httpx.AsyncClient() as client:
-        lista_usgs, lista_emsc = await asyncio.gather(
-            obtener_sismos_usgs(client),
-            obtener_sismos_emsc(client)
-        )
-    
-    todos_los_sismos = lista_usgs + lista_emsc
-    unificados_memoria = []
-
-    # Algoritmo de Deduplicación
-    for sismo in todos_los_sismos:
-        duplicado = False
-        for unificado in unificados_memoria:
-            distancia = calcular_distancia(sismo["lat"], sismo["lng"], unificado["lat"], unificado["lng"])
-            diferencia_tiempo = abs(sismo["time"] - unificado["time"])
-            
-            if distancia < 50.0 and diferencia_tiempo < 120:
-                duplicado = True
-                if sismo["fuente"] not in unificado["fuentes_confirmadas"]:
-                    unificado["fuentes_confirmadas"].append(sismo["fuente"])
-                break
-        
-        if not duplicado:
-            sismo["fuentes_confirmadas"] = [sismo["fuente"]]
-            unificados_memoria.append(sismo)
-
-    resultados_finales = []
-    
-    # Conexión a la base de datos para guardar nuevos eventos
     conn = sqlite3.connect(DB_NAME)
+    conn.row_factory = sqlite3.Row
     cursor = conn.cursor()
-
-    for s in unificados_memoria:
-        id_interno_cadena = f"{s['lat']}-{s['lng']}-{int(s['time'])}"
-        id_propio = "SA-" + hashlib.md5(id_interno_cadena.encode()).hexdigest()[:8].upper()
-        
-        id_hash = int(hashlib.md5(id_propio.encode()).hexdigest(), 16)
-        es_anomalia = (id_hash % 100) < 20 
-
-        if modelo:
-            input_df = pd.DataFrame([[s["lat"], s["lng"]]], columns=['latitud', 'longitud'])
-            mag_ia = modelo.predict(input_df)[0]
-        else:
-            mag_ia = s["mag"]
-
-        mag_ia_redondeada = round(float(mag_ia), 2)
-        fuentes_str = ",".join(s["fuentes_confirmadas"])
-        anomalia_int = 1 if es_anomalia else 0
-
-        # GUARDADO INTELIGENTE: Si el sismo ya existe, no hace nada (evita errores de clave duplicada)
-        cursor.execute("""
-            INSERT OR IGNORE INTO sismos (id, fuentes, lat, lng, mag_original, mag_ia, place, es_anomalia, timestamp)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-        """, (id_propio, fuentes_str, s["lat"], s["lng"], s["mag"], mag_ia_redondeada, s["place"], anomalia_int, s["time"]))
-
-        resultados_finales.append({
-            "id": id_propio,
-            "fuentes": s["fuentes_confirmadas"],
-            "lat": s["lat"],
-            "lng": s["lng"],
-            "mag_original": s["mag"],
-            "mag_ia": mag_ia_redondeada,
-            "place": s["place"],
-            "es_anomalia": es_anomalia,
-            "timestamp": s["time"]
-        })
     
-    conn.commit()
+    # Traemos los sismos más recientes directamente de nuestra base de datos local
+    cursor.execute("SELECT * FROM sismos ORDER BY timestamp DESC LIMIT 100")
+    rows = cursor.fetchall()
     conn.close()
 
-    return resultados_finales
+    resultados = []
+    for row in rows:
+        resultados.append({
+            "id": row["id"],
+            "fuentes": row["fuentes"].split(","),
+            "lat": row["lat"],
+            "lng": row["lng"],
+            "mag_original": row["mag_original"],
+            "mag_ia": row["mag_ia"],
+            "place": row["place"],
+            "es_anomalia": bool(row["es_anomalia"]),
+            "timestamp": row["timestamp"]
+        })
+
+    return resultados
 
 if __name__ == "__main__":
     import uvicorn
