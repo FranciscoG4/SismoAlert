@@ -3,6 +3,7 @@ import pandas as pd
 import hashlib
 import httpx
 import asyncio
+import sqlite3
 from math import radians, cos, sin, asin, sqrt
 from datetime import datetime
 from fastapi import FastAPI
@@ -18,24 +19,48 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Carga del modelo
+DB_NAME = "sismos_history"
+
+# ==========================================
+# CONFIGURACIÓN DE BASE DE DATOS (SQLite)
+# ==========================================
+def inicializar_base_datos():
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute("""
+        CREATE TABLE IF NOT EXISTS sismos (
+            id TEXT PRIMARY KEY,
+            fuentes TEXT,
+            lat REAL,
+            lng REAL,
+            mag_original REAL,
+            mag_ia REAL,
+            place TEXT,
+            es_anomalia INTEGER,
+            timestamp REAL
+        )
+    """)
+    conn.commit()
+    conn.close()
+
+inicializar_base_datos()
+
+# Carga del modelo de IA
 modelo = None
 try:
     modelo = joblib.load('modelo_sismos.pkl')
 except:
     print("Aviso: Modo simulación activo (modelo.pkl no encontrado)")
 
-# Función matemática (Haversine) para calcular distancia en km entre dos coordenadas
 def calcular_distancia(lat1, lon1, lat2, lon2):
     lon1, lat1, lon2, lat2 = map(radians, [lon1, lat1, lon2, lat2])
     dlon = lon2 - lon1 
     dlat = lat2 - lat1 
     a = sin(dlat/2)**2 + cos(lat1) * cos(lat2) * sin(dlon/2)**2
     c = 2 * asin(sqrt(a)) 
-    r = 6371 # Radio de la Tierra en kilómetros
+    r = 6371 
     return c * r
 
-# 1. CAPTURA DE LA FUENTE 1: USGS
 async def obtener_sismos_usgs(client: httpx.AsyncClient):
     url = "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_hour.geojson"
     try:
@@ -52,25 +77,19 @@ async def obtener_sismos_usgs(client: httpx.AsyncClient):
                 "lng": geom[0],
                 "mag": props["mag"] if props["mag"] is not None else 0.0,
                 "place": props["place"],
-                "time": props["time"] / 1000.0 # Convertir a timestamp de segundos
+                "time": props["time"] / 1000.0
             })
         return sismos
     except Exception as e:
         print(f"Error consultando USGS: {e}")
         return []
 
-# 2. CAPTURA DE LA FUENTE 2: EMSC (EUROPA)
 async def obtener_sismos_emsc(client: httpx.AsyncClient):
-    url = "https://opendata.emsc-csem.org/api/data/earthquake/latest?limit=50"
-    # Nota: EMSC devuelve GeoJSON clásico en sus feeds de tiempo real alternativos
-    # Para asegurar estabilidad usaremos su endpoint geojson estándar
     try:
         response = await client.get("https://www.emsc-csem.org/api/v1/earthquakes/?limit=50", timeout=5.0)
-        # Adaptación simplificada para simular estructura limpia para el merge
         data = response.json()
         sismos = []
         for item in data.get("data", []):
-            # Parsear fecha a timestamp
             dt = datetime.fromisoformat(item["time"].replace("Z", "+00:00"))
             sismos.append({
                 "fuente": "EMSC",
@@ -83,59 +102,68 @@ async def obtener_sismos_emsc(client: httpx.AsyncClient):
             })
         return sismos
     except Exception as e:
-        # Si la API europea está caída o requiere auth especial, simulamos fallback elegante
-        print(f"Error consultando EMSC o usando fallback de respaldo: {e}")
+        print(f"Error consultando EMSC: {e}")
         return []
 
-# 3. EL UNIFICADOR Y FILTRO INTELIGENTE
+# ==========================================
+# ENDPOINT PRINCIPAL: MONITOREO Y PERSISTENCIA
+# ==========================================
 @app.get("/sismos_unificados")
 async def sismos_unificados():
     async with httpx.AsyncClient() as client:
-        # Llamamos a las dos agencias en paralelo (asincrónico total)
         lista_usgs, lista_emsc = await asyncio.gather(
             obtener_sismos_usgs(client),
             obtener_sismos_emsc(client)
         )
     
     todos_los_sismos = lista_usgs + lista_emsc
-    sismos_unificados = []
+    unificados_memoria = []
 
-    # Algoritmo de Deduplicación por Triangulación de Coordenadas y Tiempo
+    # Algoritmo de Deduplicación
     for sismo in todos_los_sismos:
         duplicado = False
-        for unificado in sismos_unificados:
-            # Si están a menos de 50km de distancia y menos de 120 segundos de diferencia, es el mismo evento
+        for unificado in unificados_memoria:
             distancia = calcular_distancia(sismo["lat"], sismo["lng"], unificado["lat"], unificado["lng"])
             diferencia_tiempo = abs(sismo["time"] - unificado["time"])
             
             if distancia < 50.0 and diferencia_tiempo < 120:
                 duplicado = True
-                # Agregamos la procedencia para que el frontend sepa que ambas agencias lo validaron
                 if sismo["fuente"] not in unificado["fuentes_confirmadas"]:
                     unificado["fuentes_confirmadas"].append(sismo["fuente"])
                 break
         
         if not duplicado:
             sismo["fuentes_confirmadas"] = [sismo["fuente"]]
-            sismos_unificados.append(sismo)
+            unificados_memoria.append(sismo)
 
-    # 4. PROCESAMIENTO CON LA INTELIGENCIA ARTIFICIAL
     resultados_finales = []
-    for s in sismos_unificados:
-        # Generamos ID único para nuestra startup (ej: SISMOLERT-hash)
-        id_unico_cadena = f"{s['lat']}-{s['lng']}-{int(s['time'])}"
-        id_propio = "SA-" + hashlib.md5(id_unico_cadena.encode()).hexdigest()[:8].upper()
+    
+    # Conexión a la base de datos para guardar nuevos eventos
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+
+    for s in unificados_memoria:
+        id_interno_cadena = f"{s['lat']}-{s['lng']}-{int(s['time'])}"
+        id_propio = "SA-" + hashlib.md5(id_interno_cadena.encode()).hexdigest()[:8].upper()
         
-        # Filtro de anomalías determinista basado en el ID propio
         id_hash = int(hashlib.md5(id_propio.encode()).hexdigest(), 16)
         es_anomalia = (id_hash % 100) < 20 
 
-        # Predicción de magnitud con el modelo cargado
         if modelo:
             input_df = pd.DataFrame([[s["lat"], s["lng"]]], columns=['latitud', 'longitud'])
             mag_ia = modelo.predict(input_df)[0]
         else:
             mag_ia = s["mag"]
+
+        mag_ia_redondeada = round(float(mag_ia), 2)
+        fuentes_str = ",".join(s["fuentes_confirmadas"])
+        anomalia_int = 1 if es_anomalia else 0
+
+        # GUARDADO INTELIGENTE: Si el sismo ya existe, no hace nada (evita errores de clave duplicada)
+        cursor.execute("""
+            INSERT OR IGNORE INTO sismos (id, fuentes, lat, lng, mag_original, mag_ia, place, es_anomalia, timestamp)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (id_propio, fuentes_str, s["lat"], s["lng"], s["mag"], mag_ia_redondeada, s["place"], anomalia_int, s["time"]))
 
         resultados_finales.append({
             "id": id_propio,
@@ -143,11 +171,14 @@ async def sismos_unificados():
             "lat": s["lat"],
             "lng": s["lng"],
             "mag_original": s["mag"],
-            "mag_ia": round(float(mag_ia), 2),
+            "mag_ia": mag_ia_redondeada,
             "place": s["place"],
             "es_anomalia": es_anomalia,
             "timestamp": s["time"]
         })
+    
+    conn.commit()
+    conn.close()
 
     return resultados_finales
 
