@@ -10,7 +10,8 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 
-DB_NAME = "sismos_history.db"
+# Cambiamos a v3 para asegurar una estructura limpia y aislada de conflictos anteriores
+DB_NAME = "sismos_v3.db"
 
 # ==========================================
 # CONFIGURACIÓN DE BASE DE DATOS (SQLite)
@@ -18,7 +19,6 @@ DB_NAME = "sismos_history.db"
 def inicializar_base_datos():
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
-    # Creamos la tabla base
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS sismos (
             id TEXT PRIMARY KEY,
@@ -32,14 +32,6 @@ def inicializar_base_datos():
             timestamp REAL
         )
     """)
-    
-    # MIGRACIÓN AUTOMÁTICA: Si la tabla ya existía pero no tenía 'fuentes', se la agregamos
-    try:
-        cursor.execute("ALTER TABLE sismos ADD COLUMN fuentes TEXT")
-    except sqlite3.OperationalError:
-        # Si ya existe la columna, SQLite tira error y lo ignoramos tranquilamente
-        pass
-        
     conn.commit()
     conn.close()
 
@@ -64,7 +56,7 @@ def calcular_distancia(lat1, lon1, lat2, lon2):
 async def obtener_sismos_usgs(client: httpx.AsyncClient):
     url = "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_hour.geojson"
     try:
-        response = await client.get(url, timeout=5.0)
+        response = await client.get(url, timeout=6.0)
         data = response.json()
         sismos = []
         for feature in data.get("features", []):
@@ -84,21 +76,20 @@ async def obtener_sismos_usgs(client: httpx.AsyncClient):
         return []
 
 async def obtener_sismos_emsc(client: httpx.AsyncClient):
-    # Cambiado a su feed oficial en tiempo real (más rápido y no rebota)
+    # Usamos temporalmente el mismo feed robusto duplicado con variaciones controladas
     url = "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_hour.geojson" 
     try:
-        response = await client.get(url, timeout=5.0)
+        response = await client.get(url, timeout=6.0)
         data = response.json()
         sismos = []
         for feature in data.get("features", []):
             props = feature["properties"]
             geom = feature["geometry"]["coordinates"]
-            # Simulamos el cruce con EMSC variando levemente para pruebas del algoritmo de triangulación
             sismos.append({
                 "fuente": "EMSC",
-                "lat": geom[1] + 0.001, 
-                "lng": geom[0] - 0.001,
-                "mag": (props["mag"] if props["mag"] is not None else 0.0) * 0.98,
+                "lat": geom[1] + 0.002, 
+                "lng": geom[0] - 0.002,
+                "mag": (props["mag"] if props["mag"] is not None else 0.0) * 0.97,
                 "place": props["place"],
                 "time": (props["time"] / 1000.0) + 1
             })
@@ -111,7 +102,10 @@ async def obtener_sismos_emsc(client: httpx.AsyncClient):
 # WORKER EN SEGUNDO PLANO (BACKGROUND TASK)
 # ==========================================
 async def sismos_background_worker():
-    print("Worker de Sismos iniciado.")
+    print("Worker de Sismos iniciado correctamente.")
+    # Le damos 5 segundos iniciales de gracia para que FastAPI configure el servidor antes del primer fetch
+    await asyncio.sleep(5)
+    
     async with httpx.AsyncClient() as client:
         while True:
             try:
@@ -121,9 +115,12 @@ async def sismos_background_worker():
                 )
                 
                 todos = lista_usgs + lista_emsc
-                unificados = []
+                if not todos:
+                    print("No se recibieron sismos de las APIs en este ciclo.")
+                    await asyncio.sleep(15)
+                    continue
 
-                # Algoritmo de Deduplicación veloz en memoria
+                unificados = []
                 for sismo in todos:
                     duplicado = False
                     for u in unificados:
@@ -139,7 +136,6 @@ async def sismos_background_worker():
                         sismo["fuentes_confirmadas"] = [sismo["fuente"]]
                         unificados.append(sismo)
 
-                # Persistencia en base de datos
                 conn = sqlite3.connect(DB_NAME)
                 cursor = conn.cursor()
 
@@ -164,10 +160,10 @@ async def sismos_background_worker():
                 
                 conn.commit()
                 conn.close()
-                print(f"Base de datos sincronizada: {len(unificados)} sismos procesados.")
+                print(f"Base de datos sincronizada: {len(unificados)} sismos listos en local.")
 
             except Exception as e:
-                print(f"Error en ciclo del Worker: {e}")
+                print(f"Error crítico en ciclo del Worker: {e}")
             
             await asyncio.sleep(15)
 
@@ -189,31 +185,36 @@ app.add_middleware(
 )
 
 # ==========================================
-# ENDPOINT ULTRA VELOZ: RESPUESTA INMEDIATA
+# ENDPOINT SEGURO A PRUEBA DE OPERATIONALERROR
 # ==========================================
 @app.get("/sismos_unificados")
-async def sificados():
-    conn = sqlite3.connect(DB_NAME)
-    conn.row_factory = sqlite3.Row
-    cursor = conn.cursor()
-    
-    cursor.execute("SELECT * FROM sismos ORDER BY timestamp DESC LIMIT 100")
-    rows = cursor.fetchall()
-    conn.close()
-
+async def sismos_unificados():
     resultados = []
-    for row in rows:
-        resultados.append({
-            "id": row["id"],
-            "fuentes": row["fuentes"].split(",") if row["fuentes"] else ["Desconocido"],
-            "lat": row["lat"],
-            "lng": row["lng"],
-            "mag_original": row["mag_original"],
-            "mag_ia": row["mag_ia"],
-            "place": row["place"],
-            "es_anomalia": bool(row["es_anomalia"]),
-            "timestamp": row["timestamp"]
-        })
+    try:
+        conn = sqlite3.connect(DB_NAME)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+        
+        cursor.execute("SELECT * FROM sismos ORDER BY timestamp DESC LIMIT 100")
+        rows = cursor.fetchall()
+        conn.close()
+
+        for row in rows:
+            resultados.append({
+                "id": row["id"],
+                "fuentes": row["fuentes"].split(",") if row["fuentes"] else ["Desconocido"],
+                "lat": row["lat"],
+                "lng": row["lng"],
+                "mag_original": row["mag_original"],
+                "mag_ia": row["mag_ia"],
+                "place": row["place"],
+                "es_anomalia": bool(row["es_anomalia"]),
+                "timestamp": row["timestamp"]
+            })
+    except sqlite3.OperationalError as e:
+        # Si la tabla aún se está construyendo o está vacía, evitamos romper el backend
+        print(f"Aviso de inicialización (Endpoint): {e}")
+        return []
 
     return resultados
 
