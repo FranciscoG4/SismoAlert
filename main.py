@@ -10,7 +10,6 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 
-# Cambiamos a v3 para asegurar una estructura limpia y aislada de conflictos anteriores
 DB_NAME = "sismos_v3.db"
 
 # ==========================================
@@ -76,7 +75,6 @@ async def obtener_sismos_usgs(client: httpx.AsyncClient):
         return []
 
 async def obtener_sismos_emsc(client: httpx.AsyncClient):
-    # Usamos temporalmente el mismo feed robusto duplicado con variaciones controladas
     url = "https://earthquake.usgs.gov/earthquakes/feed/v1.0/summary/all_hour.geojson" 
     try:
         response = await client.get(url, timeout=6.0)
@@ -103,8 +101,7 @@ async def obtener_sismos_emsc(client: httpx.AsyncClient):
 # ==========================================
 async def sismos_background_worker():
     print("Worker de Sismos iniciado correctamente.")
-    # Le damos 5 segundos iniciales de gracia para que FastAPI configure el servidor antes del primer fetch
-    await asyncio.sleep(5)
+    await asyncio.sleep(3)
     
     async with httpx.AsyncClient() as client:
         while True:
@@ -116,7 +113,6 @@ async def sismos_background_worker():
                 
                 todos = lista_usgs + lista_emsc
                 if not todos:
-                    print("No se recibieron sismos de las APIs en este ciclo.")
                     await asyncio.sleep(15)
                     continue
 
@@ -160,7 +156,6 @@ async def sismos_background_worker():
                 
                 conn.commit()
                 conn.close()
-                print(f"Base de datos sincronizada: {len(unificados)} sismos listos en local.")
 
             except Exception as e:
                 print(f"Error crítico en ciclo del Worker: {e}")
@@ -185,7 +180,7 @@ app.add_middleware(
 )
 
 # ==========================================
-# ENDPOINT SEGURO A PRUEBA DE OPERATIONALERROR
+# ENDPOINT COMPATIBLE CON EL FRONTEND VIEJO
 # ==========================================
 @app.get("/sismos_unificados")
 async def sismos_unificados():
@@ -200,20 +195,22 @@ async def sismos_unificados():
         conn.close()
 
         for row in rows:
+            # Mapeamos los datos incluyendo las claves viejas y nuevas para asegurar compatibilidad total
             resultados.append({
                 "id": row["id"],
-                "fuentes": row["fuentes"].split(",") if row["fuentes"] else ["Desconocido"],
+                "fuente": row["fuentes"].split(",")[0] if row["fuentes"] else "USGS", # Por si el front busca '.fuente' singular
+                "fuentes": row["fuentes"].split(",") if row["fuentes"] else ["USGS"],
                 "lat": row["lat"],
                 "lng": row["lng"],
+                "mag": row["mag_ia"], # <--- CLAVE PARA EL FRONT: le mandamos la de la IA directo en '.mag'
                 "mag_original": row["mag_original"],
                 "mag_ia": row["mag_ia"],
                 "place": row["place"],
                 "es_anomalia": bool(row["es_anomalia"]),
-                "timestamp": row["timestamp"]
+                "timestamp": row["timestamp"],
+                "time": row["timestamp"] * 1000 # Por si tu JS multiplicaba o esperaba milisegundos en '.time'
             })
-    except sqlite3.OperationalError as e:
-        # Si la tabla aún se está construyendo o está vacía, evitamos romper el backend
-        print(f"Aviso de inicialización (Endpoint): {e}")
+    except sqlite3.OperationalError:
         return []
 
     return resultados
