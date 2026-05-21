@@ -10,7 +10,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from contextlib import asynccontextmanager
 
-DB_NAME = "sismos_v3.db"
+DB_NAME = "sismos_v4.db"
 
 # ==========================================
 # CONFIGURACIÓN DE BASE DE DATOS (SQLite)
