@@ -148,6 +148,8 @@
         L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png').addTo(map);
 
         let sismosLayer = L.layerGroup().addTo(map);
+        
+        // Círculo base inicializado globalmente
         let circuloRango = L.circle([miUbicacion.lat, miUbicacion.lng], {
             radius: 2000 * 1000, color: '#ff4d4d', fillOpacity: 0.04, weight: 1.5, dashArray: '10, 10'
         }).addTo(map);
@@ -157,7 +159,6 @@
             const label = document.getElementById('arm-label');
             const box = document.getElementById('arm-box');
             
-            // "Despertar" el sistema de audio con la acción del usuario
             if (sistemaArmado) {
                 if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
                 if (audioCtx.state === 'suspended') audioCtx.resume();
@@ -177,7 +178,6 @@
         async function updateSismos() {
             const radioKm = document.getElementById('range-slider').value;
             const minMag = document.getElementById('mag-slider').value;
-            circuloRango.setRadius(radioKm * 1000);
 
             try {
                 // Consultamos directamente al backend multifuente activo en Render
@@ -197,7 +197,6 @@
                 let haySismoRojo = false;
 
                 processed.forEach(s => {
-                    // Mantener estado de anomalías inmutable
                     if (!sismosInmutables.has(s.id)) sismosInmutables.set(s.id, s.es_anomalia);
                     else if (sismosInmutables.get(s.id) === false) s.es_anomalia = false;
 
@@ -212,11 +211,10 @@
                         fillOpacity: 0.85 
                     }).addTo(sismosLayer);
 
-                    // Creamos el elemento en la interfaz detallando las fuentes combinadas
                     const div = document.createElement('div');
                     div.className = s.es_anomalia ? 'item anomalia-ia' : 'item sismo-real';
                     
-                    const fuentesTexto = s.fuentes.join(', ');
+                    const fuentesTexto = s.fuentes ? s.fuentes.join(', ') : 'USGS';
                     div.innerHTML = `
                         <span class="mag-text" style="color:${color}">${s.mag_original} Mag</span>
                         <span class="place">${s.place}</span>
@@ -239,18 +237,35 @@
             }
         }
 
-        document.getElementById('range-slider').oninput = function() {
+        // ==========================================
+        // CONTROL DE SLIDERS ULTRA OPTIMIZADO (Sin Lag)
+        // ==========================================
+        
+        // Slider de Radio: Cambia el círculo al vuelo, pero no traba internet ni la lista
+        document.getElementById('range-slider').addEventListener('input', function() {
             document.getElementById('range-val').innerText = this.value + " km";
-            updateSismos(); 
-        };
-        document.getElementById('mag-slider').oninput = function() {
-            document.getElementById('mag-val').innerText = parseFloat(this.value).toFixed(1) + " Mag";
+            circuloRango.setRadius(this.value * 1000); // Cambio gráfico fluido usando hardware gráfica
+        });
+        
+        // Al soltar el click del radio, se aplica el filtro pesado en el backend
+        document.getElementById('range-slider').addEventListener('change', function() {
             updateSismos();
-        };
+        });
 
-        // Primera ejecución
+        // Slider de Magnitud: Modifica el texto en vivo
+        document.getElementById('mag-slider').addEventListener('input', function() {
+            document.getElementById('mag-val').innerText = parseFloat(this.value).toFixed(1) + " Mag";
+        });
+        
+        // Al soltar el click de la magnitud, se actualizan los marcadores
+        document.getElementById('mag-slider').addEventListener('change', function() {
+            updateSismos();
+        });
+
+        // Primera ejecución limpia
         updateSismos();
-        // Consultas automáticas cada 10 segundos
+        
+        // Consultas automáticas ordenadas cada 10 segundos
         setInterval(updateSismos, 10000);
     </script>
 </body>
